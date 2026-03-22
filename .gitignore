@@ -1,0 +1,10 @@
+__pycache__
+playground.ipynb
+archive/*
+!archive
+config.ini
+build
+dist
+app.spec
+pyinstaller.txt
+.vscode
