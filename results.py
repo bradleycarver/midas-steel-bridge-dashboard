@@ -1,4 +1,4 @@
-from dlubal.api import rfem, common
+from midas_civil import *
 import pandas as pd
 import os
 import config_manager

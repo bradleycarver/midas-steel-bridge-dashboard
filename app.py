@@ -214,7 +214,7 @@ app_ui = ui.page_fillable(
 
     # --- Top Bar ---
     ui.div(
-        ui.div("UBC Steel Bridge - DNA RFEM Analysis Dashboard", class_="app-title"),
+        ui.div("UBC Steel Bridge - MIDAS CIVIL NX Analysis Dashboard 2026", class_="app-title"),
         ui.div(
             # Switch Group
             ui.div(
@@ -223,15 +223,15 @@ app_ui = ui.page_fillable(
                 class_="mode-switch-container"
             ),
             
-            # Export Button
+            # Node Force Summary
             ui.tooltip(
                 ui.input_action_button(
-                    "export_btn", 
-                    "Export Results", 
+                    "node_forces", 
+                    "", 
                     icon=icon_svg("file-arrow-down"),
-                    class_="export-btn"
+                    class_="node-force-btn"
                 ),
-                "Exports results only. Run analysis and save before pressing.",
+                "Feature in pdevelopment.",
                 placement="bottom"
             ),
 
@@ -305,7 +305,6 @@ app_ui = ui.page_fillable(
                 ui.input_numeric("dim_height", "Bridge Height (in)", value=26),
                 ui.input_numeric("dim_length", "Length (in)", value=276),
                 ui.input_numeric("dim_width", "Width (in)", value=32),
-                ui.input_select("analysis_order", "Analysis Order", choices=["Geometrically Linear", "P-Delta", "Large Deformations"], selected="Geometrically Linear"),
                 ui.br(), 
                 
 
@@ -395,39 +394,6 @@ def server(input, output, session):
                 ui.notification_remove(notif_id)
                 ui.notification_show(f"Analysis Failed: {str(e)}", type="error", duration=None)
 
-    # --- 1b. Export Results Only ---
-    @reactive.Effect
-    @reactive.event(input.export_btn)
-    def _():
-        notif_id = "export_notif"
-        
-        ui.notification_show("Connecting to RFEM...", id=notif_id, duration=None)
-
-        with ui.Progress(min=0, max=1) as p:
-            try:
-                # RFEM Export (No Analysis)
-                p.set(message="Exporting Results to Dashboard...", value=0.2)
-                results.save(analysis_save=False) 
-                
-                # Calculation
-                p.set(message="Processing imported data...", value=0.7)
-                data_summary = results.calculate(storage_manager.CURRENT_DIR)
-                summary.set(data_summary)
-                
-                # Update UI State
-                active_path.set(storage_manager.CURRENT_DIR)
-                active_name.set("Current")
-                
-                # Highlight the "Current" box
-                session.send_custom_message("highlight_row", {"name": "Current"})
-                
-                # Replace notification with success message
-                ui.notification_show("Export Complete! Dashboard updated.", id=notif_id, type="message", duration=5)
-                
-            except Exception as e:
-                ui.notification_remove(notif_id)
-                ui.notification_show(f"Export Failed: {str(e)}", type="error", duration=None)
-    
     # --- 2. Saving Logic ---
     @reactive.Effect
     @reactive.event(input.btn_save_modal)
@@ -653,27 +619,6 @@ def server(input, output, session):
             except Exception as e:
                 ui.notification_show(f"Setup Failed: {str(e)}", type="error", duration=None)
 
-    # --- 6. Edit Analysis Order Only ---
-    @reactive.Effect
-    @reactive.event(input.btn_edit_analysis)
-    def _():
-
-        analysis_map = {
-                    "Geometrically Linear": 1,
-                    "P-Delta": 2,
-                    "Large Deformations": 3
-                }
-        order = analysis_map[input.analysis_order()]
-        
-        with ui.Progress(min=1, max=5) as p:
-            try:
-                p.set(message=f"Switching RFEM to {input.analysis_order()}...", value=2)
-                
-                model.analysis_mode(order)
-                
-                ui.notification_show(f"Analysis settings updated to {order}.", type="message")
-            except Exception as e:
-                ui.notification_show(f"Update Failed: {str(e)}", type="error")
 
     # --- 7. Handle Browser Close ---
     @reactive.Effect

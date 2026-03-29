@@ -4,190 +4,163 @@ from midas_civil import *
 import config_manager
 import storage_manager
 
-# Constants
-INCHES = 0.0254
-POUNDS = 4.4482216
-KIP_PER_FT = 14593.903
-PRIORITY_NODES = [1000, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010,
-                  1011, 1012, 2000, 2001]
+# LINE LOADING HELPER FUNCTION
+def apply_partial_uniform_load(element_ids, element_lengths, load_case,
+                                load_value, load_start, load_end, direction="GZ"):
+    cumulative = 0.0
 
-def setup(height=26.0, width=32.0, length=276.0, version="3D", analysis_order = 1): # 12 API CALLS
-    key = config_manager.get_api_key()
+    for elem_id, length in zip(element_ids, element_lengths):
+        elem_start = cumulative
+        elem_end   = cumulative + length
+
+        # Find overlap between this element and the loaded span
+        overlap_start = max(load_start, elem_start)
+        overlap_end   = min(load_end,   elem_end)
+
+        if overlap_start < overlap_end:
+            # Convert global overlap positions to local D values [0, 1]
+            d_i = (overlap_start - elem_start) / length
+            d_j = (overlap_end - elem_start) / length
+
+            Load.Beam(
+                elem_id, load_case, "", 0, direction,
+                D=[d_i, d_j, 0, 0],
+                P=[load_value, load_value, 0, 0],
+                cmd="LINE",
+                typ="UNILOAD"
+            )
+
+        cumulative += length
+
+    Load.Beam.create() 
+
+# MODEL DATA HELPER FUNCTION
+def get_model_data():
+    Node.sync()
+    Element.sync()
+
+    node_df = pd.DataFrame([{
+        "ID": n.ID,
+        "X":  n.X,
+        "Y":  n.Y,
+        "Z":  n.Z
+    } for n in Node.nodes])
+
+    elem_df = pd.DataFrame([{
+        "ID":     e.ID,
+        "NODE_I": e.NODE[0],
+        "NODE_J": e.NODE[1],
+        "LENGTH": e.LENGTH,
+    } for e in Element.elements])
+
+    elem_df = elem_df.merge(node_df.rename(columns={"ID": "NODE_I", "X": "X_I", "Y": "Y_I", "Z": "Z_I"}), on="NODE_I") \
+                     .merge(node_df.rename(columns={"ID": "NODE_J", "X": "X_J", "Y": "Y_J", "Z": "Z_J"}), on="NODE_J")
+    
+    return elem_df, node_df
+
+# STRINGER DATA HELPER FUNCTION
+def get_stringer_data(model_df, width = 32.0, height = 26.0, version = "3D"):
+    north_df = model_df[(model_df["Y_I"] == width) & (model_df["Y_J"] == width) & (model_df["Z_I"] == height) & (model_df["Z_J"] == height)].copy().sort_values("X_I").reset_index(drop=True)
+    south_df = model_df[(model_df["Y_I"] == 0.0) & (model_df["Y_J"] == 0.0) & (model_df["Z_I"] == height) & (model_df["Z_J"] == height)].copy().sort_values("X_I").reset_index(drop=True)
+
+    if version == "2D":
+        north_df = south_df = model_df[(model_df["Y_I"] == height) & (model_df["Y_J"] == height)].copy().sort_values("X_I").reset_index(drop=True)
+    return north_df, south_df
+
+# VIRTUAL NODE CREATION HELPER FUNCTION
+def create_virtual_nodes(nodes_to_create):
+    for _, row in nodes_to_create.iterrows():
+        Node(
+            ID = row.ID,
+            X  = row.X,
+            Y  = row.Y,
+            Z  = row.Z
+        )
+    
+    Node.create()
+
+# MAIN SETUP FUNCTION
+def setup(height=26.0, width=32.0, length=276.0, version="3D"):
+    
+    # key = config_manager.get_api_key()
+
+    MAPI_KEY('eyJ1ciI6ImJjYXJ2ZTAxQHN0dWRlbnQudWJjLmNhIiwicGciOiJjaXZpbCIsImNuIjoicmZ3Q2RKZk9SUSJ9.6c5345beaa7eddb236c29c53639bbc6bdfa9e7323618b3b7ffda74fc260bf1f3')
+    MAPI_BASEURL('https://moa-engineers.midasit.com:443/civil')
+
+    Model.units('LBF','IN')
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
+            
+
+    # 1. DATA PREPARATION
+    height, width, length = float(height), float(width), float(length)
+    nodes_df = pd.read_csv(os.path.join(base_dir, "templates/nodes.csv"))
+    load_cases_df = pd.read_csv(os.path.join(storage_manager.TEMPLATES_DIR, "load_cases.csv"))
+    loads_dist_df = pd.read_csv(os.path.join(storage_manager.TEMPLATES_DIR, "loads_dist.csv"))
+    loads_nodal_df = pd.read_csv(os.path.join(storage_manager.TEMPLATES_DIR, "loads_node.csv"))
+
+    if version == "2D":
+        load_cases_df.drop(load_cases_df.index[-4:], inplace=True) # drop 3D LCs
+        nodes_df.drop(nodes_df.index[-1], inplace=True) # drop node 2001
+        nodes_df.drop(nodes_df.index[-2], inplace=True) # drop node 1000
     
-    with rfem.Application(api_key_value=key, url="localhost", port=9000) as rfem_app: # API CALL
-        
-        # 1. INITIAL FETCH
-        node_list = rfem_app.get_object_list(objs=[rfem.structure_core.Node()]) # API CALL
-        member_list = rfem_app.get_object_list(objs=[rfem.structure_core.Member()]) # API CALL
-        
-        existing_node_ids = {n.no for n in node_list}
+    nodes_df['x'] = nodes_df['x'].fillna(length - 1.0)
+    nodes_df['y'] = nodes_df['y'].fillna(width if version == "3D" else 0)
+    nodes_df['z'] = nodes_df['z'].fillna(height)
 
-        # 2. DATA PREPARATION
-        height, width, length = float(height), float(width), float(length)
-        nodes_df = pd.read_csv(os.path.join(base_dir, "templates/nodes.csv"))
-        load_cases_df = pd.read_csv(os.path.join(storage_manager.TEMPLATES_DIR, "load_cases.csv"))
-        loads_dist_df = pd.read_csv(os.path.join(storage_manager.TEMPLATES_DIR, "loads_dist.csv"))
-        loads_node_df = pd.read_csv(os.path.join(storage_manager.TEMPLATES_DIR, "loads_node.csv"))
+    loads_dist_df['d1']=loads_dist_df['d1'].fillna(length-37.0)
+    loads_dist_df['d2']=loads_dist_df['d2'].fillna(length-1.0)
+    
+    # 2. NODE CREATION
+    create_virtual_nodes(nodes_df)
 
+    # 3. LOADS CREATION
+    Load_Case.delete() # clears all load cases
+
+    Load_Case("D", "SW")
+    Load.SW("SW", dir = "Z", value = -1, load_group = "")
+
+    for _, row in load_cases_df.iterrows():
+        Load_Case("D", row.NAME)
+
+    elem_df, _ = get_model_data()
+    north_df, south_df = get_stringer_data(elem_df)
+    for _, row in loads_dist_df.iterrows():
         if version == "2D":
-            load_cases_df.drop(load_cases_df.index[-4:], inplace=True) # drop 3D LCs
-            nodes_df.drop(nodes_df.index[-1], inplace=True) # drop node 2001
-            nodes_df.drop(nodes_df.index[-2], inplace=True) # drop node 1000
-        
-        nodes_df['x'] = nodes_df['x'].fillna(length - 1.0)
-        nodes_df['y'] = nodes_df['y'].fillna(width if version == "3D" else 0)
-        nodes_df['z'] = nodes_df['z'].fillna(height)
-
-        loads_dist_df['d1']=loads_dist_df['d1'].fillna(length-37.0)
-        loads_dist_df['d2']=loads_dist_df['d2'].fillna(length-1.0)
-        
-        # 3. EVACUATE PRIORITY IDS
-        existing_priority_ids = [n for n in PRIORITY_NODES if n in existing_node_ids]
-        
-        if existing_priority_ids:
-            unused_ids = []
-            potential_id = 1
-            while len(unused_ids) < len(existing_priority_ids):
-                if potential_id not in existing_node_ids and potential_id not in PRIORITY_NODES:
-                    unused_ids.append(potential_id)
-                potential_id += 1
-            
-            swap_map = dict(zip(existing_priority_ids, unused_ids))
-            
-            # Create temp nodes and Update members
-            temp_nodes = []
-            member_updates = []
-
-            for old_id in existing_priority_ids:
-                orig_node = next(n for n in node_list if n.no == old_id)
-                new_id = swap_map[old_id]
-                temp_nodes.append(rfem.structure_core.Node(
-                    no=new_id, coordinate_1=orig_node.coordinate_1, 
-                    coordinate_2=orig_node.coordinate_2, coordinate_3=orig_node.coordinate_3
-                ))
-                # Update local node tracking
-                orig_node.no = new_id 
-
-            for mem in member_list:
-                new_s = swap_map.get(mem.node_start, mem.node_start)
-                new_e = swap_map.get(mem.node_end, mem.node_end)
-                if new_s != mem.node_start or new_e != mem.node_end:
-                    mem.node_start, mem.node_end = new_s, new_e # Update local tracking
-                    member_updates.append(rfem.structure_core.Member(no=mem.no, node_start=new_s, node_end=new_e))
-
-            rfem_app.create_object_list(temp_nodes) # API CALL
-            if member_updates:
-                rfem_app.update_object_list(member_updates) #  API CALL
-            rfem_app.delete_object_list([rfem.structure_core.Node(no=oid) for oid in existing_priority_ids]) # API CALL
-            
-            # Update local ID set
-            existing_node_ids = {n.no for n in node_list}
-
-        # 4. CREATE Nodes & Loads
-        object_batch = [rfem.loading.LoadCase(no=1, name='Self-weight', self_weight_active=True, static_analysis_settings=analysis_order)]
-
-        for row in nodes_df.itertuples():
-            if row.id not in existing_node_ids:
-                new_node = rfem.structure_core.Node(
-                    no=row.id, coordinate_1=row.x * INCHES, 
-                    coordinate_2=row.y * INCHES, coordinate_3=row.z * INCHES
-                )
-                object_batch.append(new_node)
-                node_list.append(new_node) # Update local tracking for Part 2
-
-        # Reset Load Cases
-        current_lcs = rfem_app.get_object_list(objs=[rfem.loading.LoadCase()]) # API CALL
-        rfem_app.delete_object_list([rfem.loading.LoadCase(no=lc.no) for lc in current_lcs]) # API CALL
-
-        for row in load_cases_df.itertuples():
-            object_batch.append(rfem.loading.LoadCase(no=row.id, name=row.name, static_analysis_settings=analysis_order))
-        
-        # Setup Distributed Loads
-        member_sets = rfem_app.get_object_list(objs=[rfem.structure_core.MemberSet()]) # API CALL
-        ms_ids = [ms.no for ms in member_sets]
-        
-        for row in loads_dist_df.itertuples():
-            object_batch.append(rfem.loads.MemberSetLoad(
-                no=row.id, load_case=row.load_case, member_sets=ms_ids,
-                load_type=rfem.loads.MemberSetLoad.LOAD_TYPE_FORCE,
-                load_distribution=rfem.loads.MemberSetLoad.LOAD_DISTRIBUTION_TRAPEZOIDAL,
-                distance_a_absolute=row.d1 * INCHES, distance_b_absolute=row.d2 * INCHES,
-                magnitude_1=row.q1 * KIP_PER_FT, magnitude_2=row.q2 * KIP_PER_FT
-            ))
-
+            apply_partial_uniform_load(
+                element_ids      = south_df.ID.tolist(),
+                element_lengths  = south_df.LENGTH.tolist(), 
+                load_case        = row.load_case,
+                load_value       = row.q,
+                load_start       = row.d1,
+                load_end         = row.d2, 
+                direction        = "GY"
+            )
         if version == "3D":
-            for row in loads_node_df.itertuples():
-                object_batch.append(rfem.loads.NodalLoad(
-                    no=row.id, load_case=row.load_case, nodes=[row.node],
-                    force_magnitude=row.magnitude * POUNDS,
-                    load_direction=rfem.loads.MemberSetLoad.LOAD_DIRECTION_GLOBAL_Y_OR_USER_DEFINED_V_TRUE_LENGTH
-                ))
+            apply_partial_uniform_load(
+                element_ids      = south_df.ID.tolist(),
+                element_lengths  = south_df.LENGTH.tolist(), 
+                load_case        = row.load_case,
+                load_value       = row.q,
+                load_start       = row.d1,
+                load_end         = row.d2, 
+                direction        = "GZ"
+            )
+            apply_partial_uniform_load(
+                element_ids      = north_df.ID.tolist(),
+                element_lengths  = north_df.LENGTH.tolist(), 
+                load_case        = row.load_case,
+                load_value       = row.q,
+                load_start       = row.d1,
+                load_end         = row.d2, 
+                direction        = "GZ"
+            )
+    
+    if version == "3D":
+        for _, row in loads_nodal_df.iterrows():
+            Load.Nodal(row.node, row.load_case, FZ=row.magnitude)
+        Load.Nodal.create()
         
-        rfem_app.create_object_list(object_batch) # API CALL
-
-        # 5. DUPLICATE MERGING
-        node_data = []
-        for n in node_list:
-            node_data.append({
-                "ID": n.no,
-                "X": round(n.coordinate_1 / INCHES, 4),
-                "Y": round(n.coordinate_2 / INCHES, 4),
-                "Z": round(n.coordinate_3 / INCHES, 4)
-            })
-        
-        df_nodes = pd.DataFrame(node_data)
-        duplicates = df_nodes.groupby(['X', 'Y', 'Z'])['ID'].apply(list)
-        pairs_to_fix = [group for group in duplicates if len(group) == 2]
-
-        priority_set = set(PRIORITY_NODES)
-        final_member_updates = []
-        nodes_to_delete = []
-
-        for group in pairs_to_fix:
-            node_a, node_b = group[0], group[1]
-            keeper, discard = (node_a, node_b) if node_a in priority_set else (node_b, node_a)
-
-            # Update local members using local state
-            for mem in member_list:
-                changed = False
-                if mem.node_start == discard:
-                    mem.node_start = keeper
-                    changed = True
-                if mem.node_end == discard:
-                    mem.node_end = keeper
-                    changed = True
-                
-                if changed:
-                    final_member_updates.append(rfem.structure_core.Member(
-                        no=mem.no, node_start=mem.node_start, node_end=mem.node_end
-                    ))
-            
-            nodes_to_delete.append(rfem.structure_core.Node(no=discard))
-
-        if final_member_updates:
-            rfem_app.update_object_list(final_member_updates) # API CALL
-        if nodes_to_delete:
-            rfem_app.delete_object_list(nodes_to_delete) # API CALL
-
-    return
-
-def analysis_mode(analysis_order = 1): # 3 API CALLS
-    key = config_manager.get_api_key()
-
-    with rfem.Application(api_key_value=key, url="localhost", port=9000) as rfem_app: # API CALL
-
-        object_batch = []
-
-        # Get load cases
-        current_lcs = rfem_app.get_object_list(objs=[rfem.loading.LoadCase()]) # API CALL
-        
-        for lc in current_lcs:
-            object_batch.append(rfem.loading.LoadCase(no=lc.no, name=lc.name, static_analysis_settings=analysis_order))
-        
-        rfem_app.update_object_list(object_batch) # API CALL
-
     return
 
 # DEBUG

@@ -2,46 +2,11 @@
 from midas_civil import *
 import pandas as pd
 
-# MAPI_KEY('eyJ1ciI6ImJjYXJ2ZTAxQHN0dWRlbnQudWJjLmNhIiwicGciOiJjaXZpbCIsImNuIjoicmZ3Q2RKZk9SUSJ9.6c5345beaa7eddb236c29c53639bbc6bdfa9e7323618b3b7ffda74fc260bf1f3')
-# MAPI_BASEURL('https://moa-engineers.midasit.com:443/civil')
+MAPI_KEY('eyJ1ciI6ImJjYXJ2ZTAxQHN0dWRlbnQudWJjLmNhIiwicGciOiJjaXZpbCIsImNuIjoicmZ3Q2RKZk9SUSJ9.6c5345beaa7eddb236c29c53639bbc6bdfa9e7323618b3b7ffda74fc260bf1f3')
+MAPI_BASEURL('https://moa-engineers.midasit.com:443/civil')
 
-# Model.units('LBF','IN')
+Model.units('LBF','IN')
 
-
-
-
-import requests
-
-BASE = "https://moa-engineers.midasit.com:443/civil"
-MAPI_KEY = "eyJ1ciI6ImJjYXJ2ZTAxQHN0dWRlbnQudWJjLmNhIiwicGciOiJjaXZpbCIsImNuIjoicmZ3Q2RKZk9SUSJ9.6c5345beaa7eddb236c29c53639bbc6bdfa9e7323618b3b7ffda74fc260bf1f3"  # paste your full key
-
-HEADERS = {"MAPI-Key": MAPI_KEY}
-
-# --- CONFIG ---
-OLD_NODE_ID = 3
-NEW_NODE_ID = 6-9
-ATTACHED_ELEMENTS = [2, 3]
-
-# --- Renumber node ---
-node = requests.get(f"{BASE}/db/node/{OLD_NODE_ID}", headers=HEADERS).json()["Assign"][str(OLD_NODE_ID)]
-
-requests.post(f"{BASE}/db/node", json={"Assign": {str(NEW_NODE_ID): node}}, headers=HEADERS)
-requests.delete(f"{BASE}/db/node/{OLD_NODE_ID}", headers=HEADERS)
-print(f"Node {OLD_NODE_ID} -> {NEW_NODE_ID}")
-
-# --- Update elements ---
-for elem_id in ATTACHED_ELEMENTS:
-    elem = requests.get(f"{BASE}/db/frame/{elem_id}", headers=HEADERS).json()["Assign"][str(elem_id)]
-    elem["NODE"] = [NEW_NODE_ID if n == OLD_NODE_ID else n for n in elem["NODE"]]
-    requests.put(f"{BASE}/db/frame/{elem_id}", json={"Assign": {str(elem_id): elem}}, headers=HEADERS)
-    print(f"Element {elem_id} updated")
-
-print("Done.")
-
-
-
-
-"""
 # LINE LOADING HELPER FUNCTION
 def apply_partial_uniform_load(element_ids, element_lengths, load_case,
                                 load_value, load_start, load_end, direction="GZ"):
@@ -94,7 +59,7 @@ def get_model_data():
     elem_df = elem_df.merge(node_df.rename(columns={"ID": "NODE_I", "X": "X_I", "Y": "Y_I", "Z": "Z_I"}), on="NODE_I") \
                      .merge(node_df.rename(columns={"ID": "NODE_J", "X": "X_J", "Y": "Y_J", "Z": "Z_J"}), on="NODE_J")
     
-    return elem_df
+    return elem_df, node_df
 
 # STRINGER DATA HELPER FUNCTION
 def get_stringer_data(model_df, width = 32.0):
@@ -103,8 +68,23 @@ def get_stringer_data(model_df, width = 32.0):
 
     return north_df, south_df
 
+# VIRTUAL NODE CREATION HELPER FUNCTION
+def create_virtual_nodes(nodes_to_create):
+    for _, row in nodes_to_create.iterrows():
+        Node(
+            ID = row.ID,
+            X  = row.X,
+            Y  = row.Y,
+            Z  = row.Z
+        )
+    
+    Node.create()
+    
+
+"""
 # TEST APPLYING LINE LOAD TO SOUTH STRINGER
-north_df, south_df = get_stringer_data(get_model_data())
+elem_df, node_df = get_model_data()
+north_df, south_df = get_stringer_data(elem_df)
 apply_partial_uniform_load(
     element_ids      = south_df.ID.tolist(),
     element_lengths  = south_df.LENGTH.tolist(), 
