@@ -81,17 +81,20 @@ def create_virtual_nodes(nodes_to_create):
     Node.create()
     
 
-"""
 # TEST APPLYING LINE LOAD TO SOUTH STRINGER
 elem_df, node_df = get_model_data()
-north_df, south_df = get_stringer_data(elem_df)
-apply_partial_uniform_load(
-    element_ids      = south_df.ID.tolist(),
-    element_lengths  = south_df.LENGTH.tolist(), 
-    load_case        = "LC2",
-    load_value       = -50.0,
-    load_start       = 20.0,
-    load_end         = 120.0, 
-    direction        = "GZ"
-)
-"""
+# north_df, south_df = get_stringer_data(elem_df)
+# apply_partial_uniform_load(
+#     element_ids      = south_df.ID.tolist(),
+#     element_lengths  = south_df.LENGTH.tolist(), 
+#     load_case        = "LC2",
+#     load_value       = -50.0,
+#     load_start       = 20.0,
+#     load_end         = 120.0, 
+#     direction        = "GZ"
+# )
+print(elem_df.head())
+print(node_df.head())
+
+# TEST CREATING VIRTUAL NODES (CHECK EXISTING NODES FIRST)
+# elem_df, node_df = get_model_data()

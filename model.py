@@ -9,6 +9,7 @@ def apply_partial_uniform_load(element_ids, element_lengths, load_case,
                                 load_value, load_start, load_end, direction="GZ"):
     cumulative = 0.0
 
+    print(element_ids, element_lengths, load_case, load_value, load_start, load_end, direction)
     for elem_id, length in zip(element_ids, element_lengths):
         elem_start = cumulative
         elem_end   = cumulative + length
@@ -31,8 +32,6 @@ def apply_partial_uniform_load(element_ids, element_lengths, load_case,
             )
 
         cumulative += length
-
-    Load.Beam.create() 
 
 # MODEL DATA HELPER FUNCTION
 def get_model_data():
@@ -69,15 +68,19 @@ def get_stringer_data(model_df, width = 32.0, height = 26.0, version = "3D"):
 
 # VIRTUAL NODE CREATION HELPER FUNCTION
 def create_virtual_nodes(nodes_to_create):
-    for _, row in nodes_to_create.iterrows():
+    for i in range(len(nodes_to_create)):
+        row = nodes_to_create.iloc[i]
         Node(
-            ID = row.ID,
-            X  = row.X,
-            Y  = row.Y,
-            Z  = row.Z
+            id = None,
+            x  = float(row['x']),
+            y  = float(row['y']),
+            z  = float(row['z']),
+            merge = True
         )
     
+    print("Creating virtual nodes...")
     Node.create()
+    print("Virtual nodes created.")
 
 # MAIN SETUP FUNCTION
 def setup(height=26.0, width=32.0, length=276.0, version="3D"):
@@ -91,40 +94,58 @@ def setup(height=26.0, width=32.0, length=276.0, version="3D"):
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
             
+    exist_elem, exist_nodes = get_model_data()
 
     # 1. DATA PREPARATION
     height, width, length = float(height), float(width), float(length)
     nodes_df = pd.read_csv(os.path.join(base_dir, "templates/nodes.csv"))
     load_cases_df = pd.read_csv(os.path.join(storage_manager.TEMPLATES_DIR, "load_cases.csv"))
     loads_dist_df = pd.read_csv(os.path.join(storage_manager.TEMPLATES_DIR, "loads_dist.csv"))
-    loads_nodal_df = pd.read_csv(os.path.join(storage_manager.TEMPLATES_DIR, "loads_node.csv"))
-
-    if version == "2D":
-        load_cases_df.drop(load_cases_df.index[-4:], inplace=True) # drop 3D LCs
-        nodes_df.drop(nodes_df.index[-1], inplace=True) # drop node 2001
-        nodes_df.drop(nodes_df.index[-2], inplace=True) # drop node 1000
+    loads_nodal_df = pd.read_csv(os.path.join(storage_manager.TEMPLATES_DIR, "loads_nodal.csv"))
     
     nodes_df['x'] = nodes_df['x'].fillna(length - 1.0)
     nodes_df['y'] = nodes_df['y'].fillna(width if version == "3D" else 0)
     nodes_df['z'] = nodes_df['z'].fillna(height)
 
+    if version == "2D":
+        load_cases_df.drop(load_cases_df.index[-4:], inplace=True) # drop 3D LCs
+        nodes_df.drop(nodes_df.index[-1], inplace=True) # drop node 2001
+        nodes_df.drop(nodes_df.index[-2], inplace=True) # drop node 1000
+        nodes_df[['y', 'z']] = nodes_df[['z', 'y']]
+
     loads_dist_df['d1']=loads_dist_df['d1'].fillna(length-37.0)
     loads_dist_df['d2']=loads_dist_df['d2'].fillna(length-1.0)
     
+    # DEBUG
+    # print(nodes_df.head())
+    # print(load_cases_df.head())
+    # print(loads_dist_df.head())
+    # print(loads_nodal_df.head())
+    
     # 2. NODE CREATION
+    print(nodes_df)
     create_virtual_nodes(nodes_df)
 
-    # 3. LOADS CREATION
+    # 3. LOADS CASES CREATION
     Load_Case.delete() # clears all load cases
 
     Load_Case("D", "SW")
-    Load.SW("SW", dir = "Z", value = -1, load_group = "")
 
     for _, row in load_cases_df.iterrows():
         Load_Case("D", row.NAME)
 
-    elem_df, _ = get_model_data()
-    north_df, south_df = get_stringer_data(elem_df)
+    Load_Case.create()
+    print("Load cases created.")
+    
+    # 4. LOADS CREATION
+    Load.SW("SW", dir = "Z", value = -1, load_group = "").create()
+    print("SW load created.")
+
+    north_df, south_df = get_stringer_data(exist_elem, version=version)
+    print("North stringer elements:\n", north_df)
+    print("South stringer elements:\n", south_df)
+    print("Distributed loads to apply:\n", loads_dist_df)
+
     for _, row in loads_dist_df.iterrows():
         if version == "2D":
             apply_partial_uniform_load(
@@ -155,14 +176,17 @@ def setup(height=26.0, width=32.0, length=276.0, version="3D"):
                 load_end         = row.d2, 
                 direction        = "GZ"
             )
+
+    Load.Beam.create() # creates all beam loads
     
     if version == "3D":
         for _, row in loads_nodal_df.iterrows():
             Load.Nodal(row.node, row.load_case, FZ=row.magnitude)
-        Load.Nodal.create()
+    
+    Load.Nodal.create() # creates all nodal loads
         
     return
 
 # DEBUG
 if __name__ == "__main__":
-    setup()
+    setup(version="2D")
