@@ -1,4 +1,4 @@
-from midas_civil import *
+from midas_civil import * # type: ignore
 import pandas as pd
 import pyarrow as pa
 import os
@@ -29,8 +29,15 @@ def save(version = "3D"):
 
     # Save results to current folder
     try:
-        results_displacements = Result.TABLE.Displacement().to_pandas()
-        results_reactions = Result.TABLE.Reaction().to_pandas()
+        results_displacements = Result.TABLE.Displacement().to_pandas() # sets model to metric for some reason
+        results_reactions = Result.TABLE.Reaction().to_pandas() # sets model to metric for some reason
+
+        # lets convert back to imperial
+        results_displacements[['DX', 'DY', 'DZ']] = results_displacements[['DX', 'DY', 'DZ']] * 1000 / 25.4
+        results_reactions[['FX', 'FY', 'FZ']] = results_reactions[['FX', 'FY', 'FZ']] * 224.809
+
+        Model.units('LBF','IN') # model back to imperial
+
         Node.sync()
         nodes = pd.DataFrame([{
             "ID": n.ID,
@@ -39,18 +46,31 @@ def save(version = "3D"):
             "Z":  n.Z
         } for n in Node.nodes])
 
+        # merge node coords into results
+        results_displacements = results_displacements.merge(
+            nodes,
+            how = "left",
+            left_on=['Node'],
+            right_on=['ID']
+        ).drop(columns=['ID'])[['Load','Node','X','Y','Z','DX','DY','DZ','RX','RY','RZ']]
+
+        results_reactions = results_reactions.merge(
+            nodes,
+            how = "left",
+            left_on=['Node'],
+            right_on=['ID']
+        ).drop(columns=['ID'])[['Load','Node','X','Y','Z','FX','FY','FZ','MX','MY','MZ']]
+
         if not os.path.exists(storage_manager.CURRENT_DIR):
             os.makedirs(storage_manager.CURRENT_DIR)
             print("Created 'current' directory")
 
-        results_displacements.drop(columns=['Index']).to_csv(os.path.join(storage_manager.CURRENT_DIR, "displacements.csv"), index=False)
-        results_reactions.drop(columns=['Index']).to_csv(os.path.join(storage_manager.CURRENT_DIR, "reactions.csv"), index=False)
-        nodes.to_csv(os.path.join(storage_manager.CURRENT_DIR, "nodes.csv"), index=False)
-        Model.units('LBF','IN')
+        # send to csv
+        results_displacements.round(5).to_csv(os.path.join(storage_manager.CURRENT_DIR, "displacements.csv"), index=False)
+        results_reactions.round(5).to_csv(os.path.join(storage_manager.CURRENT_DIR, "reactions.csv"), index=False)
 
         print("Results have been saved to .csv in the 'current' folder")
         
-
     except RuntimeError:
         print("Error getting one or more results.")
         return
@@ -61,7 +81,7 @@ def save(version = "3D"):
 # Input: directory path
 # Output: dict containing results
 
-def calculate(directory="current", version="3D", width=32.0, height=26.0):
+def calculate(directory="current", version="3D", length = 276.0, width=32.0, height=26.0):
 
     disp_path = os.path.join(directory, 'displacements.csv')
     react_path = os.path.join(directory, 'reactions.csv')
@@ -81,44 +101,48 @@ def calculate(directory="current", version="3D", width=32.0, height=26.0):
     reactions = pd.read_csv(react_path)
     
     # fill empty values
+    results[['x_a', 'x_b', 'x_c', 'x_d']] = results[['x_a', 'x_b', 'x_c', 'x_d']].fillna(length-1)
     results[['y_a', 'y_b', 'y_c', 'y_d']] = results[['y_a', 'y_b', 'y_c', 'y_d']].fillna(width)
     results[['z_a', 'z_b', 'z_c', 'z_d']] = results[['z_a', 'z_b', 'z_c', 'z_d']].fillna(height)
 
-    # type casting
-    for col in ['lc_a', 'lc_b', 'lc_c', 'lc_d']:
-        results[col] = results[col].astype(str)
-
-    displacements['Node'] = displacements['Node'].astype(int)  
+    # TYPE CASTING CAUSE SOFTWARE IS STUPID
+    results['lc_a'] = results['lc_a'].astype(str)
+    displacements['Load'] = displacements['Load'].astype(str)
+    reactions['Load'] = reactions['Load'].astype(str)
+    displacements[['X', 'Y', 'Z']] = displacements[['X', 'Y', 'Z']].astype(float)
+    reactions[['X', 'Y', 'Z']] = reactions[['X', 'Y', 'Z']].astype(float)
+    
+    # displacements['Node'] = displacements['Node'].astype(int)  
 
     # 2D TOGGLE: If in 2D, cantilever is always node 2000
-    if version == "2D":
+    if version == "2D":\
         results.loc[:, 'node_b'] = 2000
     
     # search for deflections
     for i in ['a', 'b']:
         results = results.merge(
-            displacements[['Load', 'Node', 'DZ']], 
+            displacements[['Load', 'X', 'Y', 'Z', 'DZ']], 
             how= "left", 
-            left_on=['lc_'+i, 'node_'+i], 
-            right_on=['Load', 'Node']
+            left_on=['lc_'+i, 'x_'+i, 'y_'+i, 'z_'+i], 
+            right_on=['Load', 'X', 'Y', 'Z']
         )
         print(results.head())
         
         results.rename(columns={'DZ': 'defl_'+i}, inplace=True)
-        results.drop(columns=['Load', 'Node'], inplace=True)
+        results.drop(columns=['Load', 'X', 'Y', 'Z'], inplace=True)
         print(results.head())
 
     # search for deflections
     for i in ['c', 'd']:
         results = results.merge(
-            displacements[['Load', 'Node', 'DY']], 
+            displacements[['Load', 'X', 'Y', 'Z', 'DY']], 
             how= "left", 
-            left_on=['lc_'+i, 'node_'+i], 
-            right_on=['Load', 'Node']
+            left_on=['lc_'+i, 'x_'+i, 'y_'+i, 'z_'+i], 
+            right_on=['Load', 'X', 'Y', 'Z']
         )
         
         results.rename(columns={'DY': 'defl_'+i}, inplace=True)
-        results.drop(columns=['Load', 'Node'], inplace=True)
+        results.drop(columns=['Load', 'X', 'Y', 'Z'], inplace=True)
 
     # calculate SE
     calculate_gamma_lat = lambda x: 1 if x >= 0.375 else 0.9
@@ -137,10 +161,13 @@ def calculate(directory="current", version="3D", width=32.0, height=26.0):
         'Aggregate Deflection (in)': results['agg_defl'].mean(),
         'Maximum Lateral Sway (in)': results[['defl_c', 'defl_d']].abs().max().max()
     }
+    cols_of_interest = ['defl_a', 'defl_b', 'defl_c', 'defl_d', 'agg_defl', 'structural_efficiency']
+    summary['DataFrame'] = summary['DataFrame'].loc[:, cols_of_interest]
     summary['DataFrame'].columns = ['Back Span Deflection (in)', 'Cantilever Deflection (in)', 'Back Span Sway (in)', 'Cantilever Sway (in)', 'Aggregate Deflection (in)', 'Structural Efficiency ($)']
 
-    # print(summary)
-    # results.to_csv('current/test_output.csv')
+    # DEBUG
+    print(summary)
+    results.to_csv('current/test_output.csv', index=False)
 
     return summary
 
@@ -148,5 +175,5 @@ def calculate(directory="current", version="3D", width=32.0, height=26.0):
 # DEBUG
 if __name__ == "__main__":
     
-    save()
-    # print(calculate())
+    #save()
+    calculate()
