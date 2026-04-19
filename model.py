@@ -105,7 +105,11 @@ def setup(height=26.0, width=32.0, length=276.0, version="3D"):
     
     nodes_df['x'] = nodes_df['x'].fillna(length - 1.0)
     nodes_df['y'] = nodes_df['y'].fillna(width if version == "3D" else 0)
-    nodes_df['z'] = nodes_df['z'].fillna(height)
+    nodes_df['z'] = nodes_df['z'].fillna(height)\
+    
+    loads_nodal_df['x'] = loads_nodal_df['x'].fillna(length - 1.0)
+    loads_nodal_df['y'] = loads_nodal_df['y'].fillna(width if version == "3D" else 0)
+    loads_nodal_df['z'] = loads_nodal_df['z'].fillna(height)
 
     if version == "2D":
         load_cases_df.drop(load_cases_df.index[-4:], inplace=True) # drop 3D LCs
@@ -180,13 +184,22 @@ def setup(height=26.0, width=32.0, length=276.0, version="3D"):
     Load.Beam.create() # creates all beam loads
     
     if version == "3D":
-        for _, row in loads_nodal_df.iterrows():
-            Load.Nodal(row.node, row.load_case, FZ=row.magnitude)
-    
-    Load.Nodal.create() # creates all nodal loads
+        loads_nodal_df = loads_nodal_df.merge(
+            exist_nodes,
+            left_on=['x', 'y', 'z'],
+            right_on=['X', 'Y', 'Z'],
+            how='left'
+        )
         
+        print(loads_nodal_df)
+
+        for _, row in loads_nodal_df.iterrows():
+            Load.Nodal(row.ID, str(row.load_case), FY=row.magnitude)
+        
+        Load.Nodal.create() # creates all nodal loads
+            
     return
 
 # DEBUG
 if __name__ == "__main__":
-    setup(version="2D")
+    setup(version="3D")

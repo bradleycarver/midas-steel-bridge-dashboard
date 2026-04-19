@@ -1,78 +1,67 @@
 from midas_civil import *
 import pandas as pd
+import pyarrow as pa
 import os
 import config_manager
 import storage_manager
-
-# MAX 4 API CALLS
-
-INCHES = 0.0254
-POUNDS = 4.4482216
 
 # Function: runs analysis on active model and returns results df
 # Inputs: None
 # Outputs: displacement and reactions dfs
 
-def get_model_name_from_folder():
-    """Searches the 'current' directory for an .rf6 file and returns its name."""
+def save(version = "3D"):
+    # key = config_manager.get_api_key()
+
+    # Ensures model is set up correctly before proceeding
+    MAPI_KEY('eyJ1ciI6ImJjYXJ2ZTAxQHN0dWRlbnQudWJjLmNhIiwicGciOiJjaXZpbCIsImNuIjoicmZ3Q2RKZk9SUSJ9.6c5345beaa7eddb236c29c53639bbc6bdfa9e7323618b3b7ffda74fc260bf1f3')
+    MAPI_BASEURL('https://moa-engineers.midasit.com:443/civil')
+
+    Model.units('LBF','IN')
+
+    if version == "3D":
+        Model.type(strc_type=0)
+    elif version == "2D":
+        Model.type(strc_type=3)
+
+    Model.analyse()
+    print("Analysis complete. Saving model and results...")
+    Model.save()
+
+    # Save results to current folder
     try:
-        # List all files in the current directory
-        files = os.listdir(storage_manager.CURRENT_DIR)
-        # Filter for .rf6 files
-        rf6_files = [f for f in files if f.lower().endswith('.rf6')]
+        results_displacements = Result.TABLE.Displacement().to_pandas()
+        results_reactions = Result.TABLE.Reaction().to_pandas()
+        Node.sync()
+        nodes = pd.DataFrame([{
+            "ID": n.ID,
+            "X":  n.X,
+            "Y":  n.Y,
+            "Z":  n.Z
+        } for n in Node.nodes])
+
+        if not os.path.exists(storage_manager.CURRENT_DIR):
+            os.makedirs(storage_manager.CURRENT_DIR)
+            print("Created 'current' directory")
+
+        results_displacements.drop(columns=['Index']).to_csv(os.path.join(storage_manager.CURRENT_DIR, "displacements.csv"), index=False)
+        results_reactions.drop(columns=['Index']).to_csv(os.path.join(storage_manager.CURRENT_DIR, "reactions.csv"), index=False)
+        nodes.to_csv(os.path.join(storage_manager.CURRENT_DIR, "nodes.csv"), index=False)
+        Model.units('LBF','IN')
+
+        print("Results have been saved to .csv in the 'current' folder")
         
-        if rf6_files:
-            return os.path.splitext(rf6_files[0])[0]
-    except Exception:
-        pass
-    
-    return "Bridge_Model" # Fallback default
 
-def save(analysis_save = True):
-    key = config_manager.get_api_key()
-    model_name = get_model_name_from_folder()
+    except RuntimeError:
+        print("Error getting one or more results.")
+        return
 
-
-    with rfem.Application(api_key_value=key) as rfem_app: # API CALL
-
-        # Runs Analysis
-        if analysis_save:
-            calc_info = rfem_app.calculate_all(skip_warnings=True) # API CALL
-            print(f"\nCalculation Info:\n{calc_info}")
-            model_path = os.path.abspath(os.path.join(storage_manager.CURRENT_DIR, f"{model_name}.rf6"))
-            rfem_app.save_model(path=model_path, results=True) # API CALL
-
-        # Save results to current folder
-        try:
-            results_displacements: common.Table = rfem_app.get_results( # API CALL
-                results_type=rfem.results.ResultsType.STATIC_ANALYSIS_NODES_GLOBAL_DEFORMATIONS
-            )
-
-            results_reactions: common.Table = rfem_app.get_results( # API CALL
-                results_type=rfem.results.ResultsType.STATIC_ANALYSIS_NODES_SUPPORT_FORCES
-            )
-
-
-            if not os.path.exists(storage_manager.CURRENT_DIR):
-                os.makedirs(storage_manager.CURRENT_DIR)
-                print("Created 'current' directory")
-
-            results_displacements.data.to_csv(os.path.join(storage_manager.CURRENT_DIR, "displacements.csv"), index=False)
-            results_reactions.data.to_csv(os.path.join(storage_manager.CURRENT_DIR, "reactions.csv"), index=False)
-
-            print("Results have been saved to .csv in the 'current' folder")
-
-        except RuntimeError:
-            print("Error getting one or more results.")
-            return
-
-    return results_displacements.data, results_reactions.data
+    return results_displacements, results_reactions
 
 # Function: Calculates results for display on dashboard
 # Input: directory path
 # Output: dict containing results
 
-def calculate(directory="current", version="3D"):
+def calculate(directory="current", version="3D", width=32.0, height=26.0):
 
     disp_path = os.path.join(directory, 'displacements.csv')
     react_path = os.path.join(directory, 'reactions.csv')
@@ -91,6 +80,16 @@ def calculate(directory="current", version="3D"):
     displacements = pd.read_csv(disp_path)
     reactions = pd.read_csv(react_path)
     
+    # fill empty values
+    results[['y_a', 'y_b', 'y_c', 'y_d']] = results[['y_a', 'y_b', 'y_c', 'y_d']].fillna(width)
+    results[['z_a', 'z_b', 'z_c', 'z_d']] = results[['z_a', 'z_b', 'z_c', 'z_d']].fillna(height)
+
+    # type casting
+    for col in ['lc_a', 'lc_b', 'lc_c', 'lc_d']:
+        results[col] = results[col].astype(str)
+
+    displacements['Node'] = displacements['Node'].astype(int)  
+
     # 2D TOGGLE: If in 2D, cantilever is always node 2000
     if version == "2D":
         results.loc[:, 'node_b'] = 2000
@@ -98,34 +97,33 @@ def calculate(directory="current", version="3D"):
     # search for deflections
     for i in ['a', 'b']:
         results = results.merge(
-            displacements[['loading', 'node_no', 'u_z']], 
+            displacements[['Load', 'Node', 'DZ']], 
             how= "left", 
             left_on=['lc_'+i, 'node_'+i], 
-            right_on=['loading', 'node_no']
+            right_on=['Load', 'Node']
         )
+        print(results.head())
         
-        results.rename(columns={'u_z': 'defl_'+i}, inplace=True)
-        results.drop(columns=['loading', 'node_no'], inplace=True)
+        results.rename(columns={'DZ': 'defl_'+i}, inplace=True)
+        results.drop(columns=['Load', 'Node'], inplace=True)
+        print(results.head())
 
     # search for deflections
     for i in ['c', 'd']:
         results = results.merge(
-            displacements[['loading', 'node_no', 'u_y']], 
+            displacements[['Load', 'Node', 'DY']], 
             how= "left", 
             left_on=['lc_'+i, 'node_'+i], 
-            right_on=['loading', 'node_no']
+            right_on=['Load', 'Node']
         )
         
-        results.rename(columns={'u_y': 'defl_'+i}, inplace=True)
-        results.drop(columns=['loading', 'node_no'], inplace=True)
-        
-    # convert from SI units
-    results = results[['defl_a', 'defl_b', 'defl_c', 'defl_d']].div(INCHES).fillna(0).copy()
-    
+        results.rename(columns={'DY': 'defl_'+i}, inplace=True)
+        results.drop(columns=['Load', 'Node'], inplace=True)
+
     # calculate SE
     calculate_gamma_lat = lambda x: 1 if x >= 0.375 else 0.9
     gamma_lat = calculate_gamma_lat(results[['defl_c', 'defl_d']].abs().max().max())
-    weight = reactions[reactions['loading'] == 'LC1']['p_z'].sum() / -POUNDS if not reactions[reactions['loading'] == 'LC1'].empty else 0
+    weight = reactions[reactions['Load'] == 'SW']['FZ'].sum() if not reactions[reactions['Load'] == 'SW'].empty else 0
     weight *= 2 if version == "2D" else 1 # double weight for 2d
     results.loc[:, 'agg_defl'] = results['defl_a'].abs() + results['defl_b'].abs()
     
@@ -150,5 +148,5 @@ def calculate(directory="current", version="3D"):
 # DEBUG
 if __name__ == "__main__":
     
-    save(analysis=True)
-    print(calculate())
+    save()
+    # print(calculate())

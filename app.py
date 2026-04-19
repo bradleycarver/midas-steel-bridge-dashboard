@@ -373,11 +373,11 @@ def server(input, output, session):
             try:
                 # RFEM Save
                 p.set(message="Running Analysis in RFEM (this may take a moment)...", value=0.2)
-                results.save() 
+                results.save(version = get_version()) 
                 
                 # Calculation
                 p.set(message="Analysis complete. Processing results...", value=0.7)
-                data_summary = results.calculate(storage_manager.CURRENT_DIR)
+                data_summary = results.calculate(storage_manager.CURRENT_DIR, version=get_version())
                 summary.set(data_summary)
                 
                 # Update UI State
