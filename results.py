@@ -126,11 +126,10 @@ def calculate(directory="current", version="3D", length = 276.0, width=32.0, hei
             left_on=['lc_'+i, 'x_'+i, 'y_'+i, 'z_'+i], 
             right_on=['Load', 'X', 'Y', 'Z']
         )
-        print(results.head())
         
         results.rename(columns={'DZ': 'defl_'+i}, inplace=True)
         results.drop(columns=['Load', 'X', 'Y', 'Z'], inplace=True)
-        print(results.head())
+        # print(results.head())
 
     # search for deflections
     for i in ['c', 'd']:
@@ -143,6 +142,8 @@ def calculate(directory="current", version="3D", length = 276.0, width=32.0, hei
         
         results.rename(columns={'DY': 'defl_'+i}, inplace=True)
         results.drop(columns=['Load', 'X', 'Y', 'Z'], inplace=True)
+        # print(results.head())
+
 
     # calculate SE
     calculate_gamma_lat = lambda x: 1 if x >= 0.375 else 0.9
@@ -166,8 +167,8 @@ def calculate(directory="current", version="3D", length = 276.0, width=32.0, hei
     summary['DataFrame'].columns = ['Back Span Deflection (in)', 'Cantilever Deflection (in)', 'Back Span Sway (in)', 'Cantilever Sway (in)', 'Aggregate Deflection (in)', 'Structural Efficiency ($)']
 
     # DEBUG
-    print(summary)
-    results.to_csv('current/test_output.csv', index=False)
+    # print(summary)
+    # results.to_csv('current/test_output.csv', index=False)
 
     return summary
 
@@ -175,5 +176,5 @@ def calculate(directory="current", version="3D", length = 276.0, width=32.0, hei
 # DEBUG
 if __name__ == "__main__":
     
-    #save()
+    # save()
     calculate()
